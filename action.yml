@@ -9,6 +9,10 @@ inputs:
       Whether the action is run as a cron job.
       Set true to trigger syncing of new PRs.
     required: false
+  sync_label:
+    description: >
+      Require a specific label to be present to enable syncing to Jira.
+    required: false
 runs:
   using: "docker"
   image: "Dockerfile"

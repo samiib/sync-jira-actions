@@ -43,10 +43,6 @@ def main():
         print('Not running in GitHub action context, nothing to do')
         return
 
-    if not os.environ['GITHUB_REPOSITORY'].startswith('espressif/'):
-        print('Not an Espressif repo, nothing to sync to JIRA')
-        return
-
     # Connect to Jira server
     print('Connecting to Jira Server...')
 
@@ -106,13 +102,19 @@ def main():
         if 'pull_request' not in event['issue']:
             event['issue']['pull_request'] = True  # we don't care about the value
 
-    # don't sync if user is our collaborator
+    # Don't sync a PR if user/creator is a collaborator
     github = Github(os.environ['GITHUB_TOKEN'])
     repo = github.get_repo(os.environ['GITHUB_REPOSITORY'])
     gh_issue = event['issue']
     is_pr = 'pull_request' in gh_issue
     if is_pr and repo.has_in_collaborators(gh_issue['user']['login']):
         print('Skipping issue sync for Pull Request from collaborator')
+        return
+    
+    # If sync label is set, don't sync an issues that do not have the label
+    sync_label = os.environ.get('INPUT_SYNC_LABEL')
+    if sync_label and sync_label not in [l['name'] for l in gh_issue["labels"]]:
+        print(f'Skipping issue sync because Issue is missing the {sync_label} label')
         return
 
     action_handlers = {
