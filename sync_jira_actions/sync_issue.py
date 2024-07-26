@@ -72,12 +72,9 @@ def handle_issue_closed(jira, event):
     # issues often get closed for the wrong reasons - ie the user
     # found a workaround but the root cause still exists.
     issue = _leave_jira_issue_comment(jira, event, 'closed', False)
-    try:
-        # Sets value of custom GitHub Issue field to Closed
-        issue.update(fields={'customfield_12100': {'value': 'Closed'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Closed when closing issue with error: {error}')
+    
     if issue is not None:
+        _set_issue_status_field(issue, 'Closed')
         _update_link_resolved(jira, event['issue'], issue)
 
 
@@ -125,11 +122,7 @@ def handle_issue_deleted(jira, event):
 
 def handle_issue_reopened(jira, event):
     issue = _leave_jira_issue_comment(jira, event, 'reopened', True)
-    try:
-        # Sets value of custom GitHub Issue field to Open
-        issue.update(fields={'customfield_12100': {'value': 'Open'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Open when reopening issue with error: {error}')
+    _set_issue_status_field(issue, 'Open')
     _update_link_resolved(jira, event['issue'], issue)
 
 
@@ -184,6 +177,13 @@ def sync_issues_manually(jira, event):
         print(f'Mirroring issue: #{issue_number} to Jira')
         handle_issue_opened(jira, event)
 
+def _set_issue_status_field(issue, status):
+    try:
+        id = os.environ.get("INPUT_STATUS_FIELD_ID")
+        # Sets value of custom GitHub Issue status field
+        issue.update(fields={f'customfield_{id}': {'value': status}})
+    except JIRAError as error:
+        print(f'Could not set GitHub Issue field to {status} with error: {error}')
 
 def _check_issue_label(label):
     """
@@ -317,12 +317,7 @@ def _create_jira_issue(jira, gh_issue, gh_repo):
 
     issue = jira.create_issue(fields)
 
-    try:
-        # Sets value of custom GitHub Issue field to Open
-        issue.update(fields={'customfield_12100': {'value': 'Open'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Open when creating new issue with error: {error}')
-
+    _set_issue_status_field(issue, 'Open')
     _add_remote_link(jira, issue, gh_issue)
     _update_github_with_jira_key(gh_issue, issue)
     if gh_issue['state'] != 'open':
