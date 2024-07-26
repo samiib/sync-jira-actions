@@ -37,23 +37,25 @@ REPO = GITHUB.get_repo(os.environ['GITHUB_REPOSITORY'])
 
 def handle_issue_opened(jira, event):
     gh_issue = event['issue']
-    issue = _find_jira_issue(jira, gh_issue, False)
+    gh_repo = event['repository']
+    issue = _find_jira_issue(jira, gh_issue, gh_repo, False)
 
     if issue is not None:
         print('Issue already exists (another event was dispatched first?)')
         return
 
     print('Creating new JIRA issue for new GitHub issue')
-    _create_jira_issue(jira, event['issue'])
+    _create_jira_issue(jira, gh_issue, gh_repo)
 
 
 def handle_issue_edited(jira, event):
     gh_issue = event['issue']
-    issue = _find_jira_issue(jira, gh_issue, True)
+    gh_repo = event['repository']
+    issue = _find_jira_issue(jira, gh_issue, gh_repo, True)
 
     fields = {
         'description': _get_description(gh_issue),
-        'summary': _get_summary(gh_issue),
+        'summary': _get_summary(gh_issue, gh_repo),
     }
 
     _update_components_field(jira, fields, issue)
@@ -81,7 +83,8 @@ def handle_issue_closed(jira, event):
 
 def handle_issue_labeled(jira, event):
     gh_issue = event['issue']
-    jira_issue = _find_jira_issue(jira, gh_issue, gh_issue['state'] == 'open')
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, gh_issue['state'] == 'open')
     if jira_issue is None:
         return
 
@@ -98,7 +101,8 @@ def handle_issue_labeled(jira, event):
 
 def handle_issue_unlabeled(jira, event):
     gh_issue = event['issue']
-    jira_issue = _find_jira_issue(jira, gh_issue, gh_issue['state'] == 'open')
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, gh_issue['state'] == 'open')
     if jira_issue is None:
         return
 
@@ -131,16 +135,17 @@ def handle_issue_reopened(jira, event):
 
 def handle_comment_created(jira, event):
     gh_comment = event['comment']
-
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
     jira.add_comment(jira_issue.id, _get_jira_comment_body(gh_comment))
 
 
 def handle_comment_edited(jira, event):
     gh_comment = event['comment']
+    gh_repo = event['repository']
     old_gh_body = _markdown2wiki(event['changes']['body']['from'])
 
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
 
     # Look for the old comment and update it if we find it
     old_jira_body = _get_jira_comment_body(gh_comment, old_gh_body)
@@ -157,7 +162,8 @@ def handle_comment_edited(jira, event):
 
 def handle_comment_deleted(jira, event):
     gh_comment = event['comment']
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
     jira.add_comment(
         jira_issue.id, f"@{gh_comment['user']['login']} deleted [GitHub issue comment|{gh_comment['html_url']}]"
     )
@@ -262,7 +268,7 @@ def _get_description(gh_issue):
       {code}
       Closes %(github_url)s
       {code}
-      in the commit message so the commit is closed on GitHub automatically.
+      in the commit message so the issue is closed on GitHub automatically.
 """
 
     return description_format % {
@@ -273,14 +279,17 @@ def _get_description(gh_issue):
     }
 
 
-def _get_summary(gh_issue):
+def _get_summary(gh_issue, gh_repo):
     """
     Return the JIRA summary corresponding to a given GitHub issue
 
     Format is: GH/PR #<gh issue number>: <github title without any JIRA slug>
     """
     is_pr = 'pull_request' in gh_issue
-    result = f"{'PR' if is_pr else 'GH'} #{gh_issue['number']}: {gh_issue['title']}"
+    number = gh_issue['number']
+    title = gh_issue['title']
+    repo = gh_repo['name']
+    result = f"{repo} {'PR' if is_pr else ''} #{number}: {title}"
 
     # don't mirror any existing JIRA slug-like pattern from GH title to JIRA summary
     # (note we don't look for a particular pattern as the JIRA issue may have moved)
@@ -289,7 +298,7 @@ def _get_summary(gh_issue):
     return result
 
 
-def _create_jira_issue(jira, gh_issue):
+def _create_jira_issue(jira, gh_issue, gh_repo):
     """
     Create a new JIRA issue from the provided GitHub issue, then return the JIRA issue.
     """
@@ -298,7 +307,7 @@ def _create_jira_issue(jira, gh_issue):
         issuetype = os.environ.get('JIRA_ISSUE_TYPE', 'Task')
 
     fields = {
-        'summary': _get_summary(gh_issue),
+        'summary': _get_summary(gh_issue, gh_repo),
         'project': os.environ['JIRA_PROJECT'],
         'description': _get_description(gh_issue),
         'issuetype': issuetype,
@@ -429,7 +438,7 @@ def _get_jira_issue_type(jira, gh_issue):
     return None  # updating a field to None seems to cause 'no change' for JIRA
 
 
-def _find_jira_issue(jira, gh_issue, make_new=False, retries=5):
+def _find_jira_issue(jira, gh_issue, gh_repo, make_new=False, retries=5):
     """Look for a JIRA issue which has a remote link to the provided GitHub issue.
 
     Will also find "manually synced" issues that point to each other by name
@@ -488,7 +497,7 @@ def _find_jira_issue(jira, gh_issue, make_new=False, retries=5):
             return _find_jira_issue(jira, gh_issue, True, retries - 1)
 
         print('Creating missing issue in JIRA')
-        return _create_jira_issue(jira, gh_issue)
+        return _create_jira_issue(jira, gh_issue, gh_repo)
 
     if len(res) > 1:
         print(f"WARNING: Remote Link globalID '{url}' returns multiple JIRA issues. Using last-updated only.")
@@ -505,10 +514,11 @@ def _leave_jira_issue_comment(jira, event, verb, should_create, jira_issue=None)
     If should_create is set then a new JIRA issue will be opened if one can't be found.
     """
     gh_issue = event['issue']
+    gh_repo = event['repository']
     is_pr = 'pull_request' in gh_issue
 
     if jira_issue is None:
-        jira_issue = _find_jira_issue(jira, event['issue'], should_create)
+        jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, should_create)
         if jira_issue is None:
             return None
     try:
