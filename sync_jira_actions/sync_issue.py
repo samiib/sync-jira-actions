@@ -411,8 +411,6 @@ def _get_jira_issue_type(jira, gh_issue):
     """
     gh_labels = [lbl['name'] for lbl in gh_issue['labels']]
 
-    issue_types = jira.issue_types()
-
     for gh_label in gh_labels:
         # Type: Feature Request label should match New Feature issue type in Jira
         if gh_label == 'Type: Feature Request':
@@ -423,6 +421,10 @@ def _get_jira_issue_type(jira, gh_issue):
         if gh_label == 'Type: Bug :bug:':
             print('GitHub label is \'Type: Bug :bug:\'. Mapping to Bug Jira issue type')
             return {'id': JIRA_BUG_TYPE_ID}  # JIRA API needs JSON here
+        
+        # Only get issues types for the synced Jira project
+        issue_types = jira.project(os.environ['JIRA_PROJECT'], expand="issueTypes").issueTypes
+
         for issue_type in issue_types:
             type_name = issue_type.name.lower()
             if gh_label.lower() in [type_name, f'type: {type_name}']:
@@ -489,7 +491,7 @@ def _find_jira_issue(jira, gh_issue, gh_repo, make_new=False, retries=5):
             # event sync failed, to sync in.
             print(f'Waiting to see if issue is created by another Action... (retries={retries})')
             time.sleep(random.randrange(30, 60))
-            return _find_jira_issue(jira, gh_issue, True, retries - 1)
+            return _find_jira_issue(jira, gh_issue, gh_repo, True, retries - 1)
 
         print('Creating missing issue in JIRA')
         return _create_jira_issue(jira, gh_issue, gh_repo)
