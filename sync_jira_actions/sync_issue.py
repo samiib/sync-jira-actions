@@ -33,7 +33,8 @@ JIRA_BUG_TYPE_ID = 10004
 GITHUB = Github(os.environ['GITHUB_TOKEN'])
 # Initialize GitHub repository
 REPO = GITHUB.get_repo(os.environ['GITHUB_REPOSITORY'])
-
+# Set the number of retries before deciding Jira issue does not exist.
+FIND_JIRA_RETRIES = os.environ.get('INPUT_FIND_JIRA_RETRIES', 5)
 
 def handle_issue_opened(jira, event):
     gh_issue = event['issue']
@@ -448,7 +449,7 @@ def _get_jira_issue_type(jira, gh_issue):
     return None  # updating a field to None seems to cause 'no change' for JIRA
 
 
-def _find_jira_issue(jira, gh_issue, gh_repo, make_new=False, retries=5):
+def _find_jira_issue(jira, gh_issue, gh_repo, make_new=False, retries=FIND_JIRA_RETRIES):
     """Look for a JIRA issue which has a remote link to the provided GitHub issue.
 
     Will also find "manually synced" issues that point to each other by name
