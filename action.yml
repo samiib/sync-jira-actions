@@ -18,6 +18,13 @@ inputs:
     description: >
       Require a specific label to be present to enable syncing to Jira.
     required: false
+  find_jira_retries:
+    description: >
+      The number of times the action will try to find the issue in Jira
+      before deciding to create a new issue. This is used to avoid race conditions
+      between action executions.
+    required: false
+    default: '5'
 runs:
   using: "docker"
   image: "Dockerfile"
