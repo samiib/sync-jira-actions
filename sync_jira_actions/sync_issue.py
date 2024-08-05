@@ -323,8 +323,21 @@ def _create_jira_issue(jira, gh_issue, gh_repo):
     if gh_issue['state'] != 'open':
         # mark the link to GitHub as resolved
         _update_link_resolved(jira, gh_issue, issue)
-
+    _add_existing_comments(jira, gh_issue, issue.id)
     return issue
+
+
+def _add_existing_comments(jira, gh_issue, issue_id):
+    """
+    Add all existing comments to a jira issue
+    """
+    comment_count = int(gh_issue.get('comments', 0))
+    if comment_count > 0:
+        print(f"Adding {comment_count} existing comment/s to Jira issue")
+        comments = REPO.get_issue(gh_issue['number']).get_comments().reversed
+        for comment in comments:
+            gh_comment = dict(body=comment.body, html_url=comment.html_url, user={"login":  comment.user.login})
+            jira.add_comment(issue_id, _get_jira_comment_body(gh_comment))
 
 
 def _add_remote_link(jira, issue, gh_issue):
