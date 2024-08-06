@@ -34,7 +34,7 @@ GITHUB = Github(os.environ['GITHUB_TOKEN'])
 # Initialize GitHub repository
 REPO = GITHUB.get_repo(os.environ['GITHUB_REPOSITORY'])
 # Set the number of retries before deciding Jira issue does not exist.
-FIND_JIRA_RETRIES = os.environ.get('INPUT_FIND_JIRA_RETRIES', 5)
+FIND_JIRA_RETRIES = int(os.environ.get('INPUT_FIND_JIRA_RETRIES', 5))
 
 def handle_issue_opened(jira, event):
     gh_issue = event['issue']
