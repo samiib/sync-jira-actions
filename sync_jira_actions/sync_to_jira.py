@@ -102,13 +102,22 @@ def main():
         if 'pull_request' not in event['issue']:
             event['issue']['pull_request'] = True  # we don't care about the value
 
-    # don't sync if user is our collaborator
+    sync_label = os.environ.get('INPUT_SYNC_LABEL')
+    gh_issue = event['issue']
+    has_sync_label = sync_label in [l['name'] for l in gh_issue["labels"]]
+    
+    # Don't sync a PR if user/creator is a collaborator
+    # unless a sync label is used and is present.
     github = Github(os.environ['GITHUB_TOKEN'])
     repo = github.get_repo(os.environ['GITHUB_REPOSITORY'])
-    gh_issue = event['issue']
     is_pr = 'pull_request' in gh_issue
-    if is_pr and repo.has_in_collaborators(gh_issue['user']['login']):
+    if is_pr and repo.has_in_collaborators(gh_issue['user']['login']) and not has_sync_label:
         print('Skipping issue sync for Pull Request from collaborator')
+        return
+    
+    # If sync label is set, don't sync any issues that do not have the label
+    if sync_label and not has_sync_label:
+        print(f'Skipping issue sync because Issue is missing the {sync_label} label')
         return
 
     action_handlers = {

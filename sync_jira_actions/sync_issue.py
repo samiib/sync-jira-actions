@@ -33,27 +33,30 @@ JIRA_BUG_TYPE_ID = 10004
 GITHUB = Github(os.environ['GITHUB_TOKEN'])
 # Initialize GitHub repository
 REPO = GITHUB.get_repo(os.environ['GITHUB_REPOSITORY'])
-
+# Set the number of retries before deciding Jira issue does not exist.
+FIND_JIRA_RETRIES = int(os.environ.get('INPUT_FIND_JIRA_RETRIES', 5))
 
 def handle_issue_opened(jira, event):
     gh_issue = event['issue']
-    issue = _find_jira_issue(jira, gh_issue, False)
+    gh_repo = event['repository']
+    issue = _find_jira_issue(jira, gh_issue, gh_repo, False)
 
     if issue is not None:
         print('Issue already exists (another event was dispatched first?)')
         return
 
     print('Creating new JIRA issue for new GitHub issue')
-    _create_jira_issue(jira, event['issue'])
+    _create_jira_issue(jira, gh_issue, gh_repo)
 
 
 def handle_issue_edited(jira, event):
     gh_issue = event['issue']
-    issue = _find_jira_issue(jira, gh_issue, True)
+    gh_repo = event['repository']
+    issue = _find_jira_issue(jira, gh_issue, gh_repo, True)
 
     fields = {
         'description': _get_description(gh_issue),
-        'summary': _get_summary(gh_issue),
+        'summary': _get_summary(gh_issue, gh_repo),
     }
 
     _update_components_field(jira, fields, issue)
@@ -70,18 +73,16 @@ def handle_issue_closed(jira, event):
     # issues often get closed for the wrong reasons - ie the user
     # found a workaround but the root cause still exists.
     issue = _leave_jira_issue_comment(jira, event, 'closed', False)
-    try:
-        # Sets value of custom GitHub Issue field to Closed
-        issue.update(fields={'customfield_12100': {'value': 'Closed'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Closed when closing issue with error: {error}')
+    
     if issue is not None:
+        _set_issue_status_field(issue, 'Closed')
         _update_link_resolved(jira, event['issue'], issue)
 
 
 def handle_issue_labeled(jira, event):
     gh_issue = event['issue']
-    jira_issue = _find_jira_issue(jira, gh_issue, gh_issue['state'] == 'open')
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, gh_issue['state'] == 'open')
     if jira_issue is None:
         return
 
@@ -98,7 +99,8 @@ def handle_issue_labeled(jira, event):
 
 def handle_issue_unlabeled(jira, event):
     gh_issue = event['issue']
-    jira_issue = _find_jira_issue(jira, gh_issue, gh_issue['state'] == 'open')
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, gh_issue['state'] == 'open')
     if jira_issue is None:
         return
 
@@ -121,26 +123,23 @@ def handle_issue_deleted(jira, event):
 
 def handle_issue_reopened(jira, event):
     issue = _leave_jira_issue_comment(jira, event, 'reopened', True)
-    try:
-        # Sets value of custom GitHub Issue field to Open
-        issue.update(fields={'customfield_12100': {'value': 'Open'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Open when reopening issue with error: {error}')
+    _set_issue_status_field(issue, 'Open')
     _update_link_resolved(jira, event['issue'], issue)
 
 
 def handle_comment_created(jira, event):
     gh_comment = event['comment']
-
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
     jira.add_comment(jira_issue.id, _get_jira_comment_body(gh_comment))
 
 
 def handle_comment_edited(jira, event):
     gh_comment = event['comment']
+    gh_repo = event['repository']
     old_gh_body = _markdown2wiki(event['changes']['body']['from'])
 
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
 
     # Look for the old comment and update it if we find it
     old_jira_body = _get_jira_comment_body(gh_comment, old_gh_body)
@@ -157,7 +156,8 @@ def handle_comment_edited(jira, event):
 
 def handle_comment_deleted(jira, event):
     gh_comment = event['comment']
-    jira_issue = _find_jira_issue(jira, event['issue'], True)
+    gh_repo = event['repository']
+    jira_issue = _find_jira_issue(jira, event['issue'], gh_repo, True)
     jira.add_comment(
         jira_issue.id, f"@{gh_comment['user']['login']} deleted [GitHub issue comment|{gh_comment['html_url']}]"
     )
@@ -178,6 +178,13 @@ def sync_issues_manually(jira, event):
         print(f'Mirroring issue: #{issue_number} to Jira')
         handle_issue_opened(jira, event)
 
+def _set_issue_status_field(issue, status):
+    try:
+        id = os.environ.get("INPUT_STATUS_FIELD_ID")
+        # Sets value of custom GitHub Issue status field
+        issue.update(fields={f'customfield_{id}': {'value': status}})
+    except JIRAError as error:
+        print(f'Could not set GitHub Issue field to {status} with error: {error}')
 
 def _check_issue_label(label):
     """
@@ -262,7 +269,7 @@ def _get_description(gh_issue):
       {code}
       Closes %(github_url)s
       {code}
-      in the commit message so the commit is closed on GitHub automatically.
+      in the commit message so the issue is closed on GitHub automatically.
 """
 
     return description_format % {
@@ -273,14 +280,17 @@ def _get_description(gh_issue):
     }
 
 
-def _get_summary(gh_issue):
+def _get_summary(gh_issue, gh_repo):
     """
     Return the JIRA summary corresponding to a given GitHub issue
 
     Format is: GH/PR #<gh issue number>: <github title without any JIRA slug>
     """
     is_pr = 'pull_request' in gh_issue
-    result = f"{'PR' if is_pr else 'GH'} #{gh_issue['number']}: {gh_issue['title']}"
+    number = gh_issue['number']
+    title = gh_issue['title']
+    repo = gh_repo['name']
+    result = f"{repo} {'PR' if is_pr else ''} #{number}: {title}"
 
     # don't mirror any existing JIRA slug-like pattern from GH title to JIRA summary
     # (note we don't look for a particular pattern as the JIRA issue may have moved)
@@ -289,7 +299,7 @@ def _get_summary(gh_issue):
     return result
 
 
-def _create_jira_issue(jira, gh_issue):
+def _create_jira_issue(jira, gh_issue, gh_repo):
     """
     Create a new JIRA issue from the provided GitHub issue, then return the JIRA issue.
     """
@@ -298,7 +308,7 @@ def _create_jira_issue(jira, gh_issue):
         issuetype = os.environ.get('JIRA_ISSUE_TYPE', 'Task')
 
     fields = {
-        'summary': _get_summary(gh_issue),
+        'summary': _get_summary(gh_issue, gh_repo),
         'project': os.environ['JIRA_PROJECT'],
         'description': _get_description(gh_issue),
         'issuetype': issuetype,
@@ -308,19 +318,27 @@ def _create_jira_issue(jira, gh_issue):
 
     issue = jira.create_issue(fields)
 
-    try:
-        # Sets value of custom GitHub Issue field to Open
-        issue.update(fields={'customfield_12100': {'value': 'Open'}})
-    except JIRAError as error:
-        print(f'Could not set GitHub Issue field to Open when creating new issue with error: {error}')
-
+    _set_issue_status_field(issue, 'Open')
     _add_remote_link(jira, issue, gh_issue)
     _update_github_with_jira_key(gh_issue, issue)
     if gh_issue['state'] != 'open':
         # mark the link to GitHub as resolved
         _update_link_resolved(jira, gh_issue, issue)
-
+    _add_existing_comments(jira, gh_issue, issue.id)
     return issue
+
+
+def _add_existing_comments(jira, gh_issue, issue_id):
+    """
+    Add all existing comments to a jira issue
+    """
+    comment_count = int(gh_issue.get('comments', 0))
+    if comment_count > 0:
+        print(f"Adding {comment_count} existing comment/s to Jira issue")
+        comments = REPO.get_issue(gh_issue['number']).get_comments().reversed
+        for comment in comments:
+            gh_comment = dict(body=comment.body, html_url=comment.html_url, user={"login":  comment.user.login})
+            jira.add_comment(issue_id, _get_jira_comment_body(gh_comment))
 
 
 def _add_remote_link(jira, issue, gh_issue):
@@ -407,8 +425,6 @@ def _get_jira_issue_type(jira, gh_issue):
     """
     gh_labels = [lbl['name'] for lbl in gh_issue['labels']]
 
-    issue_types = jira.issue_types()
-
     for gh_label in gh_labels:
         # Type: Feature Request label should match New Feature issue type in Jira
         if gh_label == 'Type: Feature Request':
@@ -419,6 +435,10 @@ def _get_jira_issue_type(jira, gh_issue):
         if gh_label == 'Type: Bug :bug:':
             print('GitHub label is \'Type: Bug :bug:\'. Mapping to Bug Jira issue type')
             return {'id': JIRA_BUG_TYPE_ID}  # JIRA API needs JSON here
+        
+        # Only get issues types for the synced Jira project
+        issue_types = jira.project(os.environ['JIRA_PROJECT'], expand="issueTypes").issueTypes
+
         for issue_type in issue_types:
             type_name = issue_type.name.lower()
             if gh_label.lower() in [type_name, f'type: {type_name}']:
@@ -429,7 +449,7 @@ def _get_jira_issue_type(jira, gh_issue):
     return None  # updating a field to None seems to cause 'no change' for JIRA
 
 
-def _find_jira_issue(jira, gh_issue, make_new=False, retries=5):
+def _find_jira_issue(jira, gh_issue, gh_repo, make_new=False, retries=FIND_JIRA_RETRIES):
     """Look for a JIRA issue which has a remote link to the provided GitHub issue.
 
     Will also find "manually synced" issues that point to each other by name
@@ -485,10 +505,10 @@ def _find_jira_issue(jira, gh_issue, make_new=False, retries=5):
             # event sync failed, to sync in.
             print(f'Waiting to see if issue is created by another Action... (retries={retries})')
             time.sleep(random.randrange(30, 60))
-            return _find_jira_issue(jira, gh_issue, True, retries - 1)
+            return _find_jira_issue(jira, gh_issue, gh_repo, True, retries - 1)
 
         print('Creating missing issue in JIRA')
-        return _create_jira_issue(jira, gh_issue)
+        return _create_jira_issue(jira, gh_issue, gh_repo)
 
     if len(res) > 1:
         print(f"WARNING: Remote Link globalID '{url}' returns multiple JIRA issues. Using last-updated only.")
@@ -505,10 +525,11 @@ def _leave_jira_issue_comment(jira, event, verb, should_create, jira_issue=None)
     If should_create is set then a new JIRA issue will be opened if one can't be found.
     """
     gh_issue = event['issue']
+    gh_repo = event['repository']
     is_pr = 'pull_request' in gh_issue
 
     if jira_issue is None:
-        jira_issue = _find_jira_issue(jira, event['issue'], should_create)
+        jira_issue = _find_jira_issue(jira, gh_issue, gh_repo, should_create)
         if jira_issue is None:
             return None
     try:

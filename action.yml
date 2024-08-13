@@ -9,6 +9,22 @@ inputs:
       Whether the action is run as a cron job.
       Set true to trigger syncing of new PRs.
     required: false
+  status_field_id:
+    description: >
+      The custom field id of the GitHub Issue status field in Jira.
+    required: false
+    default: '12100'
+  sync_label:
+    description: >
+      Require a specific label to be present to enable syncing to Jira.
+    required: false
+  find_jira_retries:
+    description: >
+      The number of times the action will try to find the issue in Jira
+      before deciding to create a new issue. This is used to avoid race conditions
+      between action executions.
+    required: false
+    default: '5'
 runs:
   using: "docker"
   image: "Dockerfile"
