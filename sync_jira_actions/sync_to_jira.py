@@ -43,6 +43,11 @@ def main():
         print('Not running in GitHub action context, nothing to do')
         return
 
+    jira_url = os.environ.get("JIRA_URL")
+    if jira_url is None or jira_url == "":
+        print('No Jira URL configured, nothing to do')
+        return
+    
     # Connect to Jira server
     print('Connecting to Jira Server...')
 
