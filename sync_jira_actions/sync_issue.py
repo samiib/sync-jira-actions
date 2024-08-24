@@ -55,7 +55,7 @@ def handle_issue_edited(jira, event):
     issue = _find_jira_issue(jira, gh_issue, gh_repo, True)
 
     fields = {
-        'description': _get_description(gh_issue),
+        'description': _get_description(gh_issue, gh_repo),
         'summary': _get_summary(gh_issue, gh_repo),
     }
 
@@ -242,40 +242,39 @@ def _markdown2wiki(markdown):
             return markdown
 
 
-def _get_description(gh_issue):
+def _get_description(gh_issue, gh_repo):
     """
     Return the JIRA description text that corresponds to the provided GitHub issue.
     """
     is_pr = 'pull_request' in gh_issue
 
     description_format = """
-[GitHub %(type)s|%(github_url)s] from user @%(github_user)s:
+h2. [GitHub %(type)s - %(repo)s #%(number)s|%(github_url)s] from user [@%(github_user)s|%(github_user_url)s]:
 
-    %(github_description)s
+%(github_description)s
 
-    ---
+----
 
-    Notes:
+Notes:
 
-    * Do not edit this description text, it may be updated automatically.
-    * Please interact on GitHub where possible, changes will sync to here.
-    """
+* Do not edit this description text, it may be updated automatically.
+* Please interact on GitHub where possible, changes will sync to here.
+"""
     description_format = description_format.lstrip('\n')
 
     if not is_pr:
         # additional dot point only shown for issues not PRs
         description_format += """
-    * If closing this issue from a commit, please add
-      {code}
-      Closes %(github_url)s
-      {code}
-      in the commit message so the issue is closed on GitHub automatically.
+If closing this issue from a commit, please add {{Closes #%(number)s}} in the commit message or PR so the issue is closed on GitHub automatically.
 """
 
     return description_format % {
         'type': 'Pull Request' if is_pr else 'Issue',
+        'repo': gh_repo['name'],
+        'number': gh_issue['number'],
         'github_url': gh_issue['html_url'],
         'github_user': gh_issue['user']['login'],
+        'github_user_url': gh_issue['user']['html_url'],
         'github_description': _markdown2wiki(gh_issue['body']),
     }
 
@@ -310,7 +309,7 @@ def _create_jira_issue(jira, gh_issue, gh_repo):
     fields = {
         'summary': _get_summary(gh_issue, gh_repo),
         'project': os.environ['JIRA_PROJECT'],
-        'description': _get_description(gh_issue),
+        'description': _get_description(gh_issue, gh_repo),
         'issuetype': issuetype,
         'labels': [_get_jira_label(lbl) for lbl in gh_issue['labels']],
     }
