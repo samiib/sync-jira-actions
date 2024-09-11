@@ -16,6 +16,7 @@
 #
 import json
 import os
+import requests
 
 from github import Github
 from jira import JIRA
@@ -30,7 +31,7 @@ from sync_issue import handle_issue_opened
 from sync_issue import handle_issue_reopened
 from sync_issue import handle_issue_unlabeled
 from sync_issue import sync_issues_manually
-from sync_pr import sync_remain_prs
+from sync_pr import sync_remain_prs, find_and_link_pr_issues
 
 
 class _JIRA(JIRA):
@@ -47,7 +48,7 @@ def main():
     if jira_url is None or jira_url == "":
         print('No Jira URL configured, nothing to do')
         return
-    
+
     # Connect to Jira server
     print('Connecting to Jira Server...')
 
@@ -66,13 +67,14 @@ def main():
         print('Running as a cron job. Syncing remaining PRs...')
         sync_remain_prs(jira)
         return
+    
+    event_name = os.environ['GITHUB_EVENT_NAME']
+    print(f"On: {event_name}")
 
     # The path of the file with the complete webhook event payload. For example, /github/workflow/event.json.
     with open(os.environ['GITHUB_EVENT_PATH'], 'r', encoding='utf-8') as file:
         event = json.load(file)
         print(json.dumps(event, indent=4))
-
-    event_name = os.environ['GITHUB_EVENT_NAME']
 
     # Check if event is workflow_dispatch and action is mirror issues.
     # If so, run manual mirroring and skip rest of the script. Works both for issues and pull requests.
@@ -107,19 +109,35 @@ def main():
         if 'pull_request' not in event['issue']:
             event['issue']['pull_request'] = True  # we don't care about the value
 
+    if event_name == 'pull_request_target':
+        # Also treat pull_request_target events just like issues events for syncing purposes
+        # Need to use the PR issue data instead of the pull data
+        issue_url = event['pull_request']['_links']['issue']['href']
+        print(f'GET {issue_url}')
+        data = requests.get(issue_url).json()
+        print(json.dumps(data, indent=4))
+        event['issue'] = data
+
     sync_label = os.environ.get('INPUT_SYNC_LABEL')
     gh_issue = event['issue']
     has_sync_label = sync_label in [l['name'] for l in gh_issue["labels"]]
-    
+
     # Don't sync a PR if user/creator is a collaborator
     # unless a sync label is used and is present.
-    github = Github(os.environ['GITHUB_TOKEN'])
+    token = os.environ['GITHUB_TOKEN']
+    github = Github(token)
     repo = github.get_repo(os.environ['GITHUB_REPOSITORY'])
     is_pr = 'pull_request' in gh_issue
+
+    if is_pr and os.environ.get('INPUT_LINK_CLOSING_ISSUES'):
+        if find_and_link_pr_issues(gh_issue):
+            print("Skipping sync for Pull Request linked to synced Issue")
+            return
+
     if is_pr and repo.has_in_collaborators(gh_issue['user']['login']) and not has_sync_label:
         print('Skipping issue sync for Pull Request from collaborator')
         return
-    
+
     # If sync label is set, don't sync any issues that do not have the label
     if sync_label and not has_sync_label:
         print(f'Skipping issue sync because Issue is missing the {sync_label} label')

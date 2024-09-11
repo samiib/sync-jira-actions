@@ -25,6 +25,11 @@ inputs:
       between action executions.
     required: false
     default: '5'
+  link_closing_issues:
+    description: >
+      Find issues that a PR will close then add the Jira issue number to the title
+      of the PR. When a closing issue is found syncing will be skipped for the PR.
+    required: false
 runs:
   using: "docker"
   image: "Dockerfile"
